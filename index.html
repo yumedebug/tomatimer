@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ポモドーロタイマー</title>
+    
+    <!-- ========================================== -->
+    <!-- 1. CSS (スタイルシート) セクション           -->
+    <!-- ========================================== -->
+    <style>
+        :root {
+            --bg-color: #f0f4f8;
+            --text-color: #333;
+            --primary-color: #ff6b6b; /* 作業時の色 (赤系) */
+            --secondary-color: #4ecdc4; /* 休憩時の色 (緑系) */
+            --container-bg: #ffffff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            background-color: var(--primary-color);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            transition: background-color 0.5s ease;
+        }
+
+        /* 休憩モード時の背景色 */
+        body.break-mode {
+            background-color: var(--secondary-color);
+        }
+
+        .timer-container {
+            background-color: var(--container-bg);
+            padding: 50px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 90%;
+            max-width: 500px;
+        }
+
+        h1.app-title {
+            font-size: 28px;
+            margin-bottom: 30px;
+            color: var(--text-color);
+        }
+
+        .mode-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .mode-btn {
+            background: none;
+            border: none;
+            padding: 10px 20px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #888;
+            cursor: pointer;
+            border-radius: 20px;
+            transition: all 0.3s;
+        }
+
+        .mode-btn.active {
+            background-color: #f0f0f0;
+            color: var(--text-color);
+        }
+
+        /* 無効化されたボタンのスタイル */
+        .mode-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .time-display {
+            font-size: 120px;
+            font-weight: bold;
+            margin-bottom: 40px;
+            color: var(--text-color);
+            font-variant-numeric: tabular-nums; /* 数字の幅を等幅に */
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        button.control-btn {
+            padding: 18px 36px;
+            font-size: 20px;
+            font-weight: bold;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.3s;
+        }
+
+        button.control-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* 無効化されたコントロールボタンのスタイル */
+        button.control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .start-btn {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        body.break-mode .start-btn {
+            background-color: var(--secondary-color);
+        }
+
+        .pause-btn {
+            background-color: #f39c12;
+            color: white;
+            display: none; /* 初期状態では非表示 */
+        }
+
+        .reset-btn {
+            background-color: #e0e0e0;
+            color: #333;
+        }
+
+        /* カスタムメッセージ用のモーダル */
+        #message-box {
+            display: none;
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            background-color: #fff3cd;
+            color: #856404;
+            font-weight: bold;
+            animation: fadeIn 0.5s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ========================================== -->
+    <!-- 2. HTML (構造) セクション                    -->
+    <!-- ========================================== -->
+    <div class="timer-container">
+        <h1 class="app-title">ポモドーロタイマー</h1>
+        <div class="mode-buttons">
+            <button id="work-btn" class="mode-btn active">作業 (25分)</button>
+            <button id="break-btn" class="mode-btn">休憩 (5分)</button>
+        </div>
+
+        <div id="time-display" class="time-display">25:00</div>
+
+        <div class="controls">
+            <button id="start-btn" class="control-btn start-btn">スタート</button>
+            <button id="pause-btn" class="control-btn pause-btn">一時停止</button>
+            <button id="reset-btn" class="control-btn reset-btn">リセット</button>
+        </div>
+
+        <div id="message-box"></div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- 3. JavaScript (動作) セクション              -->
+    <!-- ========================================== -->
+    <script>
+        // 設定値（秒）
+        const WORK_TIME = 25 * 60;
+        const BREAK_TIME = 5 * 60;
+
+        // 音声コンテキストの準備 (Web Audio API)
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        let audioCtx;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // ビープ音を鳴らす基本関数 (音量を0.5から1.0の最大値に変更)
+        function playTone(freq, type, duration, vol=1.0) {
+            if (!audioCtx) return;
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            oscillator.type = type;
+            oscillator.frequency.value = freq;
+            
+            gainNode.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + duration);
+        }
+
+        // 作業終了時のアラーム音 (ピピピピッ)
+        function playAlarmSound() {
+            initAudio();
+            playTone(880, 'sine', 0.1);
+            setTimeout(() => playTone(880, 'sine', 0.1), 150);
+            setTimeout(() => playTone(880, 'sine', 0.1), 300);
+            setTimeout(() => playTone(880, 'sine', 0.1), 450);
+        }
+
+        // カウントダウンの音 (ピッ)
+        function playCountdownBeep() {
+            initAudio();
+            playTone(660, 'sine', 0.1);
+        }
+
+        // カウントダウン終了の音 (ピー)
+        function playCountdownEnd() {
+            initAudio();
+            playTone(1320, 'sine', 0.5);
+        }
+
+        // 状態変数
+        let timeLeft = WORK_TIME;
+        let timerId = null;
+        let isRunning = false;
+        let isWorkMode = true;
+
+        // DOM要素の取得
+        const timeDisplay = document.getElementById('time-display');
+        const startBtn = document.getElementById('start-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const workBtn = document.getElementById('work-btn');
+        const breakBtn = document.getElementById('break-btn');
+        const messageBox = document.getElementById('message-box');
+        const body = document.body;
+
+        // 時間のフォーマット表示 (例: 25:00)
+        function updateDisplay() {
+            const minutes = Math.floor(timeLeft / 60);
+            const seconds = timeLeft % 60;
+            const formattedTime = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            timeDisplay.textContent = formattedTime;
+            document.title = `${formattedTime} - ポモドーロタイマー`;
+        }
+
+        // タイマーの開始
+        function startTimer() {
+            if (isRunning) return;
+            
+            initAudio(); // 音声を許可するために初期化
+
+            isRunning = true;
+            hideMessage();
+            startBtn.style.display = 'none';
+            pauseBtn.style.display = 'block';
+
+            // 休憩中は一時停止ボタンを無効にする
+            pauseBtn.disabled = !isWorkMode;
+            // 作業中はリセットボタンを無効にする (休憩中は有効)
+            resetBtn.disabled = isWorkMode;
+
+            // タイマー動作中はモード切替ボタンを無効にする
+            workBtn.disabled = true;
+            breakBtn.disabled = true;
+
+            timerId = setInterval(() => {
+                timeLeft--;
+                updateDisplay();
+
+                // 休憩モード時のカウントダウン音 (残り3, 2, 1秒)
+                if (!isWorkMode && timeLeft > 0 && timeLeft <= 3) {
+                    playCountdownBeep();
+                }
+
+                if (timeLeft <= 0) {
+                    if (!isWorkMode) {
+                        playCountdownEnd(); // 休憩終了時の音 (ピー)
+                    }
+                    timerComplete();
+                }
+            }, 1000);
+        }
+
+        // タイマーの一時停止
+        function pauseTimer() {
+            if (!isRunning) return;
+            if (!isWorkMode) return; // 休憩中は一時停止できない
+            
+            clearInterval(timerId);
+            isRunning = false;
+            startBtn.style.display = 'block';
+            pauseBtn.style.display = 'none';
+            startBtn.textContent = '再開';
+
+            // 一時停止中：作業を完了またはリセットするまでは休憩モードに変更できないようにする
+            workBtn.disabled = false;
+            breakBtn.disabled = true;
+        }
+
+        // タイマーのリセット
+        function resetTimer() {
+            // 作業中はリセットできないようにする（初期状態を除く）
+            if (isWorkMode && timeLeft !== WORK_TIME) return;
+
+            clearInterval(timerId);
+            isRunning = false;
+            timeLeft = isWorkMode ? WORK_TIME : BREAK_TIME;
+            updateDisplay();
+            
+            startBtn.style.display = 'block';
+            pauseBtn.style.display = 'none';
+            startBtn.textContent = 'スタート';
+            hideMessage();
+
+            // リセット時はすべてのボタンを有効に戻す
+            workBtn.disabled = false;
+            breakBtn.disabled = false;
+            resetBtn.disabled = false;
+        }
+
+        // モード切替 (作業/休憩)
+        function switchMode(mode) {
+            // タイマー動作中は切り替え不可にする
+            if (isRunning) return;
+
+            if (mode === 'work') {
+                isWorkMode = true;
+                timeLeft = WORK_TIME;
+                workBtn.classList.add('active');
+                breakBtn.classList.remove('active');
+                body.classList.remove('break-mode');
+            } else {
+                isWorkMode = false;
+                timeLeft = BREAK_TIME;
+                breakBtn.classList.add('active');
+                workBtn.classList.remove('active');
+                body.classList.add('break-mode');
+            }
+            
+            resetTimer();
+        }
+
+        // タイマー完了時の処理
+        function timerComplete() {
+            clearInterval(timerId);
+            isRunning = false;
+            
+            // モードに応じたメッセージと自動切り替え処理
+            if (isWorkMode) {
+                playAlarmSound(); // 作業終了時のサウンド
+                showMessage("作業終了！休憩しましょう☕️");
+                switchMode('break');
+                setTimeout(startTimer, 1000); // 1秒後に自動で休憩タイマー開始
+            } else {
+                showMessage("休憩終了！作業に戻りましょう💻");
+                switchMode('work');
+                setTimeout(startTimer, 1000); // 1秒後に自動で作業タイマー開始
+            }
+        }
+
+        // メッセージの表示
+        function showMessage(text) {
+            messageBox.textContent = text;
+            messageBox.style.display = 'block';
+        }
+
+        // メッセージの非表示
+        function hideMessage() {
+            messageBox.style.display = 'none';
+        }
+
+        // イベントリスナーの登録
+        startBtn.addEventListener('click', startTimer);
+        pauseBtn.addEventListener('click', pauseTimer);
+        resetBtn.addEventListener('click', resetTimer);
+        
+        workBtn.addEventListener('click', () => switchMode('work'));
+        breakBtn.addEventListener('click', () => switchMode('break'));
+
+        // 初期表示の更新
+        updateDisplay();
+    </script>
+</body>
+</html>
